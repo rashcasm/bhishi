@@ -16,5 +16,8 @@
     "compact": "compact compile bhishi.compact managed/bhishi",
     "build": "rm -rf dist && tsc --project tsconfig.build.json && cp -Rf ./managed ./dist/managed",
     "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
   }
 }
