@@ -1,146 +1,119 @@
-# Midnight Leaderboard
+# Bhishi — Private Savings Circles on Midnight
 
-An arcade-style privacy-preserving leaderboard built on the [Midnight Network](https://midnight.network). Every score submission creates a new entry, just like an arcade cabinet. Players choose how their identity appears: anonymous, public wallet address, or custom display name. Prove ownership of your scores via ZK proofs without revealing your identity.
+**The un-stealable, un-embarrassing chit fund.** *Bhishi* (Marathi: भिशी) is a rotating
+savings circle — India's centuries-old chit fund, run by millions of communities and
+plagued by two problems: organizers who abscond with the pot, and auctions that force
+you to **publicly signal financial distress** to your own social circle.
 
-Live on Preprod: [midnight-leaderboard.vercel.app](https://midnight-leaderboard.vercel.app)
+Bhishi fixes both on [Midnight](https://midnight.network):
 
-## What It Demonstrates
+- **The contract replaces the foreman.** Contributions sit in trustless escrow; nobody can run away with the pot. The traditional ~5% foreman commission accrues to the protocol treasury instead.
+- **Bids are sealed with zero-knowledge commitments.** Each round's pot is auctioned by discount — but your bid is `persistentCommit(discount, nonce)` on-chain. **Losing bids are never revealed.** Nobody learns you needed the money.
 
-| Concept | What You Learn |
-|---------|---------------|
-| `Map<Uint<64>, ScoreEntry>` | Storing structured data on-chain with auto-incrementing keys |
-| Privacy modes | Anonymous, public address, or custom name via conditional witness invocation |
-| Witness functions | Private data (custom name) enters the ZK circuit on demand |
-| Ownership verification | Prove you own an entry without revealing your identity |
-| Browser DApp | Lace wallet integration, in-browser ZK proving, real-time indexer reads |
-| Production deployment | Vercel (frontend) + Railway (proof server) |
-
-## Tutorial
-
-Follow the step-by-step tutorial in [tutorials/](./tutorials/) to rebuild this DApp from scratch. The tutorial covers the Compact smart contract, TypeScript integration, browser DApp with Lace wallet, and production deployment.
-
-## Project Structure
+## How a circle works
 
 ```
-midnight-leaderboard/
-├── contract/                        # Compact smart contract
-│   ├── leaderboard.compact          # Leaderboard with anonymous/custom names + verification
-│   ├── src/
-│   │   ├── index.ts                 # Exports CompiledLeaderboardContract + witnesses
-│   │   └── witnesses.ts             # getCustomName witness (private data → ZK proof)
-│   └── managed/                     # Compiler output (committed for Vercel builds)
-├── api/                             # Shared business logic (platform-agnostic)
-│   └── src/
-│       ├── index.ts                 # LeaderboardAPI: deploy(), join(), submitScore(), verifyOwnership()
-│       ├── common-types.ts          # Provider types, circuit keys, derived state
-│       └── utils/index.ts           # decodeDisplayName with generated anonymous names
-├── leaderboard-ui/                  # React + Vite frontend
-│   ├── src/
-│   │   ├── App.tsx                  # Game UI + leaderboard + verification
-│   │   ├── App.css                  # Midnight-branded dark theme
-│   │   ├── main.tsx                 # Buffer polyfill + React mount
-│   │   ├── contexts/
-│   │   │   └── BrowserLeaderboardManager.ts  # Lace wallet → providers bridge
-│   │   ├── hooks/
-│   │   │   └── useLeaderboard.ts    # Read-only indexer queries (no wallet needed)
-│   │   └── in-memory-private-state-provider.ts
-│   ├── .env.preprod                 # Production config (Railway proof server URL)
-│   └── vite.config.ts               # WASM plugins for compact-runtime in browser
-├── tutorials/                       # Step-by-step build tutorial
-├── proof-server/                    # Railway deployment
-│   └── Dockerfile                   # Midnight proof server image
-├── vercel.json                      # Vercel build config
-└── package.json                     # Workspaces: contract, api, leaderboard-ui
+JOINING → CONTRIBUTION → BIDDING → REVEAL → PAYOUT → …next round… → COMPLETE
 ```
+
+1. Organizer deploys a circle: N members, contribution per round. Terms are sealed on-chain.
+2. Each round, every member contributes NIGHT into escrow.
+3. Members place **sealed bids**: the discount they'd accept to take the pot early.
+4. After the organizer closes bidding, bidders reveal — the circuit proves each reveal
+   matches its commitment (history can't be rewritten). Highest discount wins.
+5. Winner takes `pot − discount − fee`. The discount rolls into next round's pot as the
+   communal dividend; the fee (5% of pot, protocol-fixed) accrues to the treasury.
+6. Everyone wins exactly once; after N rounds the circle completes.
+
+**Public on-chain:** terms, phase, pseudonymous member hashes, sealed bid commitments, the winning discount.
+**Never revealed:** losing bid amounts — the distress signal stays private, forever.
 
 ## Prerequisites
 
-- [Node.js v22+](https://nodejs.org/) (via `nvm use 22`)
-- [Compact toolchain](https://docs.midnight.network/getting-started/installation#install-compact)
-- [Lace wallet](https://chromewebstore.google.com/detail/lace/gafhhkghbfjjkeiendhlofajokpaflmk) browser extension
-- [Docker](https://docs.docker.com/desktop/) (for local proof server)
+- **Node.js** 20+
+- **Compact compiler** (`compact` on PATH) — only needed if you modify the contract
+- A Midnight wallet extension in Chrome:
+  - **[1AM wallet](https://1am.xyz)** — preprod/preview/mainnet, dust-free (ProofStation pays fees)
+  - **Lace** — required for the local `undeployed` network
 
-## Quick Start
-
-### 1. Install, compile, and build
+## Run (preprod + 1AM — default)
 
 ```bash
-nvm use 22
 npm install
-npm run compile
-npm run build
+npm run compile        # compile bhishi.compact → managed/bhishi (ZK keys)
+npm run build          # build contract + api TS packages
+cd ui && npm run dev   # → http://localhost:3000
 ```
 
-### 2. Start the proof server
+1. Set the **1AM wallet to Preprod** (the app's `.env` is preprod by default — a network
+   mismatch error means the wallet and app disagree; switch the wallet, reconnect).
+2. Get **tNIGHT** from the preprod faucet: https://midnight-tmnight-preprod.nethermind.dev/
+   (funding takes 2–3 minutes; contributions move real tNIGHT into escrow).
+3. Open http://localhost:3000 → Connect → **Deploy Circle** (address auto-copies).
+4. Other members: separate Chrome profiles (each profile = its own member identity +
+   wallet) → paste the circle address → **Join**.
+
+## Run (local undeployed + Lace)
+
+The 1AM wallet **cannot** connect to a local chain — use Lace for this mode.
 
 ```bash
-docker run -d -p 6300:6300 midnightntwrk/proof-server:8.0.3 -- midnight-proof-server --network preprod
+# 1. start the local stack (node + indexer + proof server) & fund wallets
+cd ../midnight-local-dev && npm start
+
+# 2. point the UI at the local network
+cd ../bhishi/ui && cp .env.undeployed .env && npm run dev
 ```
 
-### 3. Start the UI
+Switch Lace's network to **Undeployed** — it hardcodes the local ports (9944/8088/6300).
+
+## Test
 
 ```bash
-cd leaderboard-ui
-npm run dev
+cd contract && npm test    # vitest — simulator mirrors every circuit assert
 ```
 
-Open `http://localhost:3000` in Chrome with Lace installed.
+14 tests cover: circle setup & term validation, contribution escrow, **sealed-bid
+integrity** (commitment ≠ plaintext, reveal must open the exact commitment), running-max
+winner selection, unrevealed-bids-lose, one-win-per-cycle, organizer-only phase gates,
+payout math, and **full-cycle money conservation** (every micro-NIGHT in = out).
 
-### 4. Play
+To recompile after contract changes (any change regenerates verifier keys → old
+deployments become incompatible, always deploy a fresh circle):
 
-1. The leaderboard loads immediately from the indexer (no wallet needed to view)
-2. Connect your Lace wallet to submit scores
-3. Click **Switch Contract** then **Deploy New** to deploy your own leaderboard
-4. Play the click challenge
-5. Submit your score as Anonymous, Public, or Custom
-6. Click "Prove" on any entry to verify ownership via ZK proof
+```bash
+npm run compile && npm run build && cd ui && npm run dev
+```
 
-## Contract
+## Architecture
 
-### Privacy Modes
+```
+contract/bhishi.compact     Compact contract — 8 circuits, sealed-bid auction core
+contract/src/               witnesses (member secret key) + compiled contract export
+contract/test/              TS simulator + vitest suite
+api/src/                    BhishiAPI (deploy/join + circuit calls), state parser
+ui/src/App.tsx              light-theme React app (landing + circle dashboard)
+ui/src/contexts/            wallet manager: 1AM-first detection, providers, proving
+ui/src/hooks/useCircle.ts   indexer state reads (works without a wallet)
+```
 
-| Mode | Display Name | How It Works |
-|------|-------------|-------------|
-| Anonymous | Generated name (e.g., "Crimson Tiger") | `persistentHash(publicKey)` stored as hash bytes, UI generates readable name |
-| Public | Truncated wallet address | Wallet address sent via witness as custom name |
-| Custom | Player's chosen name | Player types a name, sent via `getCustomName()` witness |
+### Key design decisions
 
-All modes store `ownerHash = persistentHash(publicKey)` as `Bytes<32>` on each entry, enabling ownership verification without revealing identity.
+- **Protocol fee is not user input** — it's a protocol constant (5% of each pot, the
+  culturally standard foreman commission), computed at deploy and sealed into the
+  contract. Revenue = `circles × pot × 5% × rounds`.
+- **Member identity** = `persistentHash("bhishi:member:v1", secretKey)` — the secret
+  lives in browser localStorage and never leaves; the chain sees only the hash.
+- **Reveal secrets** (discount + nonce) are stored per-round in localStorage; reveal
+  from the same browser that placed the bid.
+- **1AM proving**: the wallet's own `getProvingProvider` handles ZK proving +
+  `balanceUnsealedTransaction` sponsors dust fees. Lace/local falls back to the
+  HTTP proof server.
 
-### Circuits
+## Known limitations (MVP)
 
-| Circuit | Purpose |
-|---------|---------|
-| `submitScore(score, useCustomName)` | Create a new leaderboard entry |
-| `verifyOwnership(targetEntryId)` | Prove you own an entry (for prizes, badges) |
-| `getEntryCount()` | Read total number of entries |
-
-## Production Deployment
-
-The DApp runs on two services: Vercel for the static frontend (free) and Railway for the proof server ($5/mo).
-
-The proof server is needed because browser JavaScript cannot reach Midnight's public proof server directly (CORS). Railway runs its own instance of the proof server Docker image, which accepts requests from any origin.
-
-### Proof server (Railway)
-
-1. Go to [railway.app](https://railway.app) and sign in with GitHub
-2. Create a new project from this repo
-3. Set **Root Directory** to `proof-server`
-4. In **Settings**, then **Networking**, set port to `6300` and generate a domain
-5. Copy the HTTPS URL
-
-### Frontend (Vercel)
-
-1. Import the repo into [Vercel](https://vercel.com)
-2. Vercel reads `vercel.json` automatically
-3. Make sure **Root Directory** is empty (not set to a subdirectory)
-4. Deploy
-
-Circuit keys are committed in `contract/managed/` so no Compact compiler is needed on Vercel.
-
-
-## License
-
-Apache-2.0
-
-Built on the [Midnight Network](https://midnight.network).
+- Winners are visible at payout (funds must move) — losing bids are the protected secret.
+- Members must escrow each round manually; default risk (winner stops contributing) is
+  handled in real deployments via collateral or reputation — out of scope here.
+- Reveal requires the browser that placed the bid (localStorage nonce).
+- Organizer advances phases manually; block-time deadlines are a roadmap item.

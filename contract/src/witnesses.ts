@@ -1,27 +1,23 @@
-export type LeaderboardPrivateState = {
+/**
+ * Witness implementations for the Bhishi contract.
+ *
+ * The only witness is the member's secret key — it never leaves the
+ * browser. The member's on-chain identity is persistentHash(domain, sk),
+ * computed inside the circuit.
+ */
+
+export type BhishiPrivateState = {
   readonly secretKey: Uint8Array;
 };
 
-export const createLeaderboardPrivateState = (secretKey: Uint8Array): LeaderboardPrivateState => ({
+export const createBhishiPrivateState = (secretKey: Uint8Array): BhishiPrivateState => ({
   secretKey,
 });
-
-let _customName = new Uint8Array(32);
-
-export const setCustomName = (name: string): void => {
-  _customName = new Uint8Array(32);
-  _customName.set(new TextEncoder().encode(name).slice(0, 32));
-};
 
 export const createWitnesses = () => ({
   localSecretKey: ({
     privateState,
   }: {
-    privateState: LeaderboardPrivateState;
-  }): [LeaderboardPrivateState, Uint8Array] => [privateState, privateState.secretKey],
-  getCustomName: ({
-    privateState,
-  }: {
-    privateState: LeaderboardPrivateState;
-  }): [LeaderboardPrivateState, Uint8Array] => [privateState, _customName],
+    privateState: BhishiPrivateState;
+  }): [BhishiPrivateState, Uint8Array] => [privateState, privateState.secretKey],
 });

@@ -1,16 +1,16 @@
 import { CompiledContract } from '@midnight-ntwrk/compact-js';
 
-export * as Leaderboard from '../managed/leaderboard/contract/index.js';
-export { createWitnesses, setCustomName, createLeaderboardPrivateState } from './witnesses.js';
-export type { LeaderboardPrivateState } from './witnesses.js';
+export * as Bhishi from '../managed/bhishi/contract/index.js';
+export { createWitnesses, createBhishiPrivateState } from './witnesses.js';
+export type { BhishiPrivateState } from './witnesses.js';
 
-import * as LeaderboardContract from '../managed/leaderboard/contract/index.js';
+import * as BhishiContract from '../managed/bhishi/contract/index.js';
 import { createWitnesses } from './witnesses.js';
 
-export const CompiledLeaderboardContract = CompiledContract.make(
-  'leaderboard',
-  LeaderboardContract.Contract,
+export const CompiledBhishiContract = CompiledContract.make(
+  'bhishi',
+  BhishiContract.Contract,
 ).pipe(
   CompiledContract.withWitnesses(createWitnesses()),
-  CompiledContract.withCompiledFileAssets('./managed/leaderboard'),
+  CompiledContract.withCompiledFileAssets('./managed/bhishi'),
 );

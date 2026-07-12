@@ -1,0 +1,203 @@
+/**
+ * Bhishi — Private Savings Circles (chit funds / ROSCAs) on Midnight
+ *
+ * N members pay a fixed contribution every round. Each round the pot is
+ * auctioned with SEALED bids: the member willing to accept the biggest
+ * discount wins the pot early. Losing bids are never revealed — the
+ * "financial distress signal" that kills real-world chit fund privacy
+ * stays hidden forever. The contract replaces the foreman: escrow is
+ * trustless and the traditional foreman fee accrues to the protocol
+ * treasury.
+ *
+ * Privacy model:
+ *   - Bid amounts:   persistentCommit(discount, nonce) — sealed on-chain.
+ *   - Member ids:    persistentHash(domain, secretKey) — pseudonymous.
+ *   - Losing bids:   never opened. Only the winning discount is disclosed
+ *                    (required to compute the payout & carryover).
+ *   - Money flow:    unshielded NIGHT via receiveUnshielded/sendUnshielded
+ *                    (the privacy boundary — payouts are visible).
+ *
+ * Round lifecycle:
+ *   JOINING → CONTRIBUTION → BIDDING → REVEAL → PAYOUT → (next round | COMPLETE)
+ */
+
+pragma language_version 0.23;
+
+import CompactStandardLibrary;
+
+export enum Phase { JOINING, CONTRIBUTION, BIDDING, REVEAL, PAYOUT, COMPLETE }
+
+// ── Circle terms (sealed at deploy — the "chit agreement") ─────────────
+export sealed ledger organizer: Bytes<32>;
+export sealed ledger memberTarget: Uint<8>;
+export sealed ledger contributionAmount: Uint<64>;
+export sealed ledger feePerRound: Uint<64>;
+
+// ── Round state ────────────────────────────────────────────────────────
+export ledger phase: Phase;
+export ledger currentRound: Uint<8>;
+export ledger memberCount: Uint<8>;
+export ledger members: Map<Bytes<32>, Boolean>;
+export ledger paidRound: Map<Bytes<32>, Uint<8>>;    // memberId → last round contributed
+export ledger paidCount: Uint<8>;                    // contributions received this round
+
+// ── Sealed auction state ───────────────────────────────────────────────
+export ledger bidCommits: Map<Bytes<32>, Bytes<32>>; // memberId → sealed bid commitment
+export ledger bidRounds: Map<Bytes<32>, Uint<8>>;    // memberId → round the bid belongs to
+export ledger bestDiscount: Uint<64>;                // running max during REVEAL
+export ledger bestBidder: Bytes<32>;
+export ledger winners: Map<Bytes<32>, Uint<8>>;      // memberId → round won (one win per cycle)
+
+// ── Money ──────────────────────────────────────────────────────────────
+export ledger carryover: Uint<64>;                   // winning discount rolls into next pot
+export ledger treasury: Uint<64>;                    // protocol revenue (the foreman fee)
+
+witness localSecretKey(): Bytes<32>;
+
+// Domain-separated pseudonymous member identity.
+// Exported pure so the UI can compute its own id locally (no proving).
+export pure circuit memberId(sk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<2, Bytes<32>>>([pad(32, "bhishi:member:v1"), sk]);
+}
+
+// Pot available this round: everyone's contribution + last round's discount
+circuit potAmount(): Uint<64> {
+  return ((memberTarget as Uint<64>) * contributionAmount + carryover) as Uint<64>;
+}
+
+constructor(target: Uint<8>, contribution: Uint<64>, fee: Uint<64>) {
+  assert(target > 1, "need at least 2 members");
+  assert(contribution > 0, "contribution must be positive");
+  assert(fee < contribution, "fee too large");
+  organizer = disclose(memberId(localSecretKey()));
+  memberTarget = disclose(target);
+  contributionAmount = disclose(contribution);
+  feePerRound = disclose(fee);
+  phase = Phase.JOINING;
+  currentRound = 0;
+  memberCount = 0;
+  paidCount = 0;
+  bestDiscount = 0;
+  carryover = 0;
+  treasury = 0;
+}
+
+/** Join the circle. Auto-starts round 1 when the circle is full. */
+export circuit joinCircle(): [] {
+  assert(phase == Phase.JOINING, "joining closed");
+  const mid = disclose(memberId(localSecretKey()));
+  assert(!members.member(mid), "already joined");
+  members.insert(mid, true);
+  memberCount = (memberCount + 1) as Uint<8>;
+  if (memberCount == memberTarget) {
+    phase = Phase.CONTRIBUTION;
+    currentRound = 1;
+  }
+}
+
+/** Pay this round's contribution into escrow. Auto-opens bidding when all paid. */
+export circuit contribute(): [] {
+  assert(phase == Phase.CONTRIBUTION, "not contribution phase");
+  const mid = disclose(memberId(localSecretKey()));
+  assert(members.member(mid), "not a member");
+  if (paidRound.member(mid)) {
+    assert(paidRound.lookup(mid) < currentRound, "already contributed this round");
+  }
+  receiveUnshielded(nativeToken(), contributionAmount as Uint<128>);
+  paidRound.insert(mid, currentRound);
+  paidCount = (paidCount + 1) as Uint<8>;
+  if (paidCount == memberTarget) {
+    phase = Phase.BIDDING;
+    paidCount = 0;
+  }
+}
+
+/**
+ * Place a SEALED bid: only persistentCommit(discount, nonce) hits the chain.
+ * Nobody — including other members — learns the discount you offered.
+ * Re-bidding overwrites your previous commitment.
+ */
+export circuit placeBid(discount: Uint<64>, nonce: Bytes<32>): [] {
+  assert(phase == Phase.BIDDING, "not bidding phase");
+  const mid = disclose(memberId(localSecretKey()));
+  assert(members.member(mid), "not a member");
+  assert(!winners.member(mid), "already won a round");
+  assert(discount > 0, "discount must be positive");
+  assert((discount + feePerRound) < potAmount(), "discount too large");
+  bidCommits.insert(mid, disclose(persistentCommit<Uint<64>>(discount, nonce)));
+  bidRounds.insert(mid, currentRound);
+}
+
+/** Organizer closes the bid window and opens reveals. */
+export circuit closeBidding(): [] {
+  assert(phase == Phase.BIDDING, "not bidding phase");
+  assert(disclose(memberId(localSecretKey())) == organizer, "not organizer");
+  phase = Phase.REVEAL;
+}
+
+/**
+ * Open your commitment. The circuit proves the reveal matches the sealed
+ * bid — history cannot be rewritten. Running max tracks the winner.
+ * Members who don't reveal simply lose (their bid stays sealed forever).
+ */
+export circuit revealBid(discount: Uint<64>, nonce: Bytes<32>): [] {
+  assert(phase == Phase.REVEAL, "not reveal phase");
+  const mid = disclose(memberId(localSecretKey()));
+  assert(bidCommits.member(mid), "no bid to reveal");
+  assert(bidRounds.lookup(mid) == currentRound, "bid is stale");
+  assert(bidCommits.lookup(mid) == persistentCommit<Uint<64>>(discount, nonce), "commitment mismatch");
+  const d = disclose(discount);
+  if (d > bestDiscount) {
+    bestDiscount = d;
+    bestBidder = mid;
+  }
+}
+
+/** Organizer settles the auction: record winner, accrue the protocol fee. */
+export circuit closeReveal(): [] {
+  assert(phase == Phase.REVEAL, "not reveal phase");
+  assert(disclose(memberId(localSecretKey())) == organizer, "not organizer");
+  assert(bestDiscount > 0, "no revealed bids");
+  winners.insert(bestBidder, currentRound);
+  treasury = (treasury + feePerRound) as Uint<64>;
+  phase = Phase.PAYOUT;
+}
+
+/**
+ * Winner claims the discounted pot. The discount they gave up rolls into
+ * next round's pot (the communal dividend). Advances to the next round,
+ * or completes the circle after everyone has won once.
+ */
+export circuit claimPot(payoutAddress: UserAddress): [] {
+  assert(phase == Phase.PAYOUT, "not payout phase");
+  const mid = disclose(memberId(localSecretKey()));
+  assert(mid == bestBidder, "not the round winner");
+  const payout = (potAmount() - bestDiscount - feePerRound) as Uint<64>;
+  sendUnshielded(
+    nativeToken(),
+    payout as Uint<128>,
+    right<ContractAddress, UserAddress>(disclose(payoutAddress))
+  );
+  carryover = bestDiscount;
+  bestDiscount = 0;
+  bestBidder = default<Bytes<32>>;
+  if (currentRound == memberTarget) {
+    phase = Phase.COMPLETE;
+  } else {
+    currentRound = (currentRound + 1) as Uint<8>;
+    phase = Phase.CONTRIBUTION;
+  }
+}
+
+/** Organizer withdraws accrued protocol fees once the circle completes. */
+export circuit claimTreasury(payoutAddress: UserAddress): [] {
+  assert(phase == Phase.COMPLETE, "circle not complete");
+  assert(disclose(memberId(localSecretKey())) == organizer, "not organizer");
+  assert(treasury > 0, "treasury empty");
+  sendUnshielded(
+    nativeToken(),
+    treasury as Uint<128>,
+    right<ContractAddress, UserAddress>(disclose(payoutAddress))
+  );
+  treasury = 0;
+}
