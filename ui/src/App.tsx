@@ -11,6 +11,7 @@ import type { InitialAPI, ConnectedAPI } from '@midnight-ntwrk/dapp-connector-ap
 import { Bhishi } from 'bhishi-contract';
 import { useCircle } from './hooks/useCircle';
 import About from './About';
+import Home from './Home';
 import { BrowserBhishiManager, type CircleTerms } from './contexts/BrowserBhishiManager';
 import { CirclePhase, PHASE_LABELS, potOf, utils, type BhishiAPI } from '../../api/src/index';
 import pino from 'pino';
@@ -118,7 +119,7 @@ export default function App() {
   const [address, setAddress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const [view, setView] = useState<'app' | 'about'>('app');
+  const [view, setView] = useState<'home' | 'app' | 'about'>(DEFAULT_CONTRACT ? 'app' : 'home');
   const [contractAddress, setContractAddress] = useState(DEFAULT_CONTRACT);
   const [joinInput, setJoinInput] = useState('');
   const [copied, setCopied] = useState(false);
@@ -295,11 +296,12 @@ export default function App() {
     <div className="app">
       <header className="header">
         <div className="header-left">
-          <button className="brand" onClick={() => { setView('app'); }}>
+          <button className="brand" onClick={() => { setView('home'); }}>
             <span className="title">Bhishi</span>
             <span className="tagline">private savings circles</span>
           </button>
           <nav className="nav">
+            <button className={view === 'home' ? 'nav-on' : ''} onClick={() => setView('home')}>Home</button>
             <button className={view === 'app' ? 'nav-on' : ''} onClick={() => setView('app')}>App</button>
             <button className={view === 'about' ? 'nav-on' : ''} onClick={() => setView('about')}>How it works</button>
           </nav>
@@ -324,7 +326,9 @@ export default function App() {
         </div>
       )}
 
-      {view === 'about' ? (
+      {view === 'home' ? (
+        <Home onLaunch={() => setView('app')} onAbout={() => setView('about')} />
+      ) : view === 'about' ? (
         <About onStart={() => setView('app')} />
       ) : !contractAddress ? (
         /* ── Landing: create or join ─────────────────────────────────── */
